@@ -1,0 +1,109 @@
+# ===================================
+# A股自选股智能分析系统 - 完整部署配置
+# ===================================
+#
+# 包含服务：
+#   1. webui        - Web管理界面和API服务
+#   2. daily        - 盘后完整分析（18:00，含AI+新闻）
+#   3. intraday     - 日内实时分析（9:30/13:00/14:45，轻量级）
+#
+# 使用方式：
+#   全部启动: docker-compose -f docker-compose-full.yml up -d
+#   仅WebUI:  docker-compose -f docker-compose-full.yml up -d webui
+#   仅日内:   docker-compose -f docker-compose-full.yml up -d intraday
+#   查看日志: docker-compose -f docker-compose-full.yml logs -f
+#   停止服务: docker-compose -f docker-compose-full.yml down
+
+version: '3.8'
+
+# 公共配置
+x-common: &common
+  build:
+    context: .
+    dockerfile: docker/Dockerfile
+  restart: unless-stopped
+  env_file:
+    - .env
+  volumes:
+    - ./data:/app/data
+    - ./logs:/app/logs
+    - ./reports:/app/reports
+    - ./.env:/app/.env:ro
+  environment:
+    - TZ=Asia/Shanghai
+    - WEBUI_HOST=0.0.0.0
+    # Docker 内必须使用 0.0.0.0 才能从宿主机访问
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "10m"
+      max-file: "3"
+  deploy:
+    resources:
+      limits:
+        memory: 512M
+      reservations:
+        memory: 256M
+
+services:
+  # ===================================
+  # 服务1：WebUI + API 服务
+  # ===================================
+  webui:
+    <<: *common
+    container_name: stock-webui
+    command: ["python", "webui.py"]
+    ports:
+      - "${WEBUI_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - stock-network
+
+  # ===================================
+  # 服务2：盘后完整分析（18:00）
+  # ===================================
+  daily:
+    <<: *common
+    container_name: stock-daily-analyzer
+    command: ["python", "main.py", "--schedule"]
+    environment:
+      - TZ=Asia/Shanghai
+      - SCHEDULE_ENABLED=true
+      - SCHEDULE_TIME=${SCHEDULE_TIME:-18:00}
+      - SCHEDULE_RUN_IMMEDIATELY=${SCHEDULE_RUN_IMMEDIATELY:-true}
+      - MARKET_REVIEW_ENABLED=${MARKET_REVIEW_ENABLED:-true}
+    networks:
+      - stock-network
+    depends_on:
+      - webui
+
+  # ===================================
+  # 服务3：日内实时分析（9:30/13:00/14:45）
+  # ===================================
+  intraday:
+    <<: *common
+    container_name: stock-intraday-analyzer
+    command: ["python", "main.py", "--intraday-schedule"]
+    environment:
+      - TZ=Asia/Shanghai
+      - INTRADAY_ENABLED=true
+      - INTRADAY_TIME_POINTS=${INTRADAY_TIME_POINTS:-09:30,13:00,14:45}
+      - INTRADAY_MODE=${INTRADAY_MODE:-lightweight}
+      - INTRADAY_NOTIFY_THRESHOLD=${INTRADAY_NOTIFY_THRESHOLD:-60}
+      - INTRADAY_SIGNAL_TYPES=${INTRADAY_SIGNAL_TYPES:-STRONG_BUY,BUY,STRONG_SELL}
+      - INTRADAY_VOLUME_ALERT=${INTRADAY_VOLUME_ALERT:-3.0}
+      - INTRADAY_MIN_NOTIFY_INTERVAL=${INTRADAY_MIN_NOTIFY_INTERVAL:-1800}
+      - INTRADAY_HOLIDAY_DETECTION=${INTRADAY_HOLIDAY_DETECTION:-simple}
+    networks:
+      - stock-network
+    depends_on:
+      - webui
+
+networks:
+  stock-network:
+    driver: bridge

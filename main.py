@@ -122,6 +122,20 @@ def parse_arguments() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        '--intraday-schedule',
+        action='store_true',
+        help='启用日内实时分析模式（盘中多时间点分析）'
+    )
+
+    parser.add_argument(
+        '--intraday-mode',
+        type=str,
+        choices=['lightweight', 'hybrid', 'full'],
+        default=None,
+        help='日内分析模式：lightweight（轻量级），hybrid（混合），full（完整）'
+    )
+
+    parser.add_argument(
         '--market-review',
         action='store_true',
         help='仅运行大盘复盘分析'
@@ -527,9 +541,65 @@ def main() -> int:
             )
             return 0
 
-        # 模式2: 定时任务模式
+        # 模式2a: 日内实时分析模式
+        if args.intraday_schedule or config.intraday_enabled:
+            logger.info("=" * 60)
+            logger.info("模式: 日内实时分析")
+            logger.info(f"分析时间点: {', '.join(config.intraday_time_points)}")
+            logger.info(f"分析模式: {args.intraday_mode or config.intraday_mode}")
+            logger.info(f"节假日检测: {config.intraday_holiday_detection}")
+            logger.info("=" * 60)
+
+            from src.intraday_scheduler import run_with_intraday_schedule
+            from src.core.intraday_pipeline import create_intraday_pipeline
+            from src.notification import NotificationService
+
+            # 创建日内分析流水线
+            pipeline = create_intraday_pipeline(config)
+            notifier = NotificationService()
+
+            def intraday_task():
+                """日内分析任务"""
+                try:
+                    # 刷新股票列表
+                    config.refresh_stock_list()
+                    current_stocks = config.stock_list
+
+                    logger.info(f"[日内] 开始分析 {len(current_stocks)} 只股票...")
+
+                    # 执行日内分析
+                    results = pipeline.run(current_stocks)
+
+                    if results:
+                        logger.info(f"[日内] 触发 {len(results)} 个信号")
+
+                        # 生成并发送报告
+                        if not args.no_notify:
+                            report = notifier.generate_intraday_report(results)
+                            success = notifier.send(report)
+                            if success:
+                                logger.info("[日内] 通知发送成功")
+                            else:
+                                logger.warning("[日内] 通知发送失败")
+                        else:
+                            logger.info("[日内] 通知已禁用（--no-notify）")
+                    else:
+                        logger.info("[日内] 无信号触发，跳过通知")
+
+                except Exception as e:
+                    logger.exception(f"[日内] 分析任务失败: {e}")
+
+            # 启动日内调度器
+            run_with_intraday_schedule(
+                task=intraday_task,
+                time_points=config.intraday_time_points,
+                holiday_detection=config.intraday_holiday_detection
+            )
+            return 0
+
+        # 模式2b: 定时任务模式（盘后）
         if args.schedule or config.schedule_enabled:
-            logger.info("模式: 定时任务")
+            logger.info("模式: 定时任务（盘后）")
             logger.info(f"每日执行时间: {config.schedule_time}")
 
             # Determine whether to run immediately:
@@ -538,7 +608,7 @@ def main() -> int:
             should_run_immediately = config.schedule_run_immediately
             if getattr(args, 'no_run_immediately', False):
                 should_run_immediately = False
-            
+
             logger.info(f"启动时立即执行: {should_run_immediately}")
 
             from src.scheduler import run_with_schedule

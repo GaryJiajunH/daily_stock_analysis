@@ -177,6 +177,20 @@ class Config:
     schedule_run_immediately: bool = True     # 启动时是否立即执行一次
     market_review_enabled: bool = True        # 是否启用大盘复盘
 
+    # === 日内实时分析配置（盘中分析）===
+    intraday_enabled: bool = False                          # 是否启用日内分析
+    intraday_time_points: List[str] = field(                # 分析时间点（HH:MM 格式）
+        default_factory=lambda: ["09:30", "13:00", "14:45"]
+    )
+    intraday_mode: str = "lightweight"                      # 分析模式: lightweight/hybrid/full
+    intraday_notify_threshold: int = 60                     # 信号评分阈值（>= 此值才通知）
+    intraday_signal_types: List[str] = field(               # 触发通知的信号类型
+        default_factory=lambda: ["STRONG_BUY", "BUY", "STRONG_SELL"]
+    )
+    intraday_volume_alert: float = 3.0                      # 异常放量阈值（量比）
+    intraday_min_notify_interval: int = 1800                # 最小通知间隔（秒，30分钟）
+    intraday_holiday_detection: str = "advanced"            # 节假日检测: simple/advanced（默认advanced）
+
     # === 实时行情增强数据配置 ===
     # 实时行情开关（关闭后使用历史收盘价进行分析）
     enable_realtime_quote: bool = True
@@ -459,7 +473,20 @@ class Config:
             # - tushare: Tushare Pro，需要2000积分，数据全面
             realtime_source_priority=cls._resolve_realtime_source_priority(),
             realtime_cache_ttl=int(os.getenv('REALTIME_CACHE_TTL', '600')),
-            circuit_breaker_cooldown=int(os.getenv('CIRCUIT_BREAKER_COOLDOWN', '300'))
+            circuit_breaker_cooldown=int(os.getenv('CIRCUIT_BREAKER_COOLDOWN', '300')),
+            # 日内实时分析配置
+            intraday_enabled=os.getenv('INTRADAY_ENABLED', 'false').lower() == 'true',
+            intraday_time_points=[
+                t.strip() for t in os.getenv('INTRADAY_TIME_POINTS', '09:30,13:00,14:45').split(',') if t.strip()
+            ],
+            intraday_mode=os.getenv('INTRADAY_MODE', 'lightweight').lower(),
+            intraday_notify_threshold=int(os.getenv('INTRADAY_NOTIFY_THRESHOLD', '60')),
+            intraday_signal_types=[
+                s.strip() for s in os.getenv('INTRADAY_SIGNAL_TYPES', 'STRONG_BUY,BUY,STRONG_SELL').split(',') if s.strip()
+            ],
+            intraday_volume_alert=float(os.getenv('INTRADAY_VOLUME_ALERT', '3.0')),
+            intraday_min_notify_interval=int(os.getenv('INTRADAY_MIN_NOTIFY_INTERVAL', '1800')),
+            intraday_holiday_detection=os.getenv('INTRADAY_HOLIDAY_DETECTION', 'advanced').lower()
         )
     
     @classmethod

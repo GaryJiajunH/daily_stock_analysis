@@ -43,6 +43,11 @@ from src.analyzer import AnalysisResult
 from src.formatters import format_feishu_markdown, markdown_to_html_document
 from bot.models import BotMessage
 
+# TYPE_CHECKING import to avoid circular dependency
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from src.core.signal_filter import IntradayResult
+
 logger = logging.getLogger(__name__)
 
 
@@ -1258,6 +1263,148 @@ class NotificationService:
         ])
         
         return "\n".join(lines)
+
+    def generate_intraday_report(self, results: List['IntradayResult']) -> str:
+        """
+        生成日内实时分析报告（精简格式）
+
+        与 generate_daily_report 的区别：
+        - 格式更精简（适合多次推送）
+        - 仅显示触发信号的股票
+        - 突出当前价格和实时变化
+        - 无 AI 分析内容
+
+        Args:
+            results: IntradayResult 列表（来自 signal_filter）
+
+        Returns:
+            Markdown 格式的日内报告
+        """
+        if not results:
+            return "暂无信号触发"
+
+        now = datetime.now().strftime('%H:%M')
+        report_date = datetime.now().strftime('%Y-%m-%d')
+
+        lines = [
+            f"# 🔔 日内实时信号 [{now}]",
+            "",
+            f"> {report_date} | 触发信号数: **{len(results)}** 只",
+            "",
+            "---",
+            "",
+        ]
+
+        # 按信号评分排序（高分在前）
+        sorted_results = sorted(results, key=lambda x: x.signal_score, reverse=True)
+
+        for result in sorted_results:
+            # 信号图标
+            signal_emoji = self._get_intraday_signal_emoji(result.buy_signal)
+
+            # 股票名称
+            stock_name = self._escape_md(result.stock_name)
+
+            lines.extend([
+                f"## {signal_emoji} [{result.code}] {stock_name}",
+                "",
+                f"**操作建议**: {result.buy_signal.value} | **评分**: {result.signal_score}/100",
+                "",
+            ])
+
+            # 当前行情
+            change_emoji = "📈" if result.change_pct > 0 else "📉" if result.change_pct < 0 else "➡️"
+            lines.extend([
+                "### 💹 当前行情",
+                "",
+                f"{change_emoji} **当前价**: {result.current_price:.2f} 元 "
+                f"({result.change_pct:+.2f}%)",
+                "",
+            ])
+
+            # 技术指标
+            lines.extend([
+                "### 📊 技术指标",
+                "",
+                f"- **趋势**: {result.trend_status.value}",
+                f"- **MA5**: {result.ma5:.2f} (乖离 {result.bias_ma5:+.2f}%)",
+                f"- **MA10**: {result.ma10:.2f}",
+                f"- **MA20**: {result.ma20:.2f}",
+            ])
+
+            # 量能指标（如果有）
+            if result.volume_ratio:
+                vol_emoji = "🔥" if result.volume_ratio > 2.0 else "📊"
+                lines.append(f"- {vol_emoji} **量比**: {result.volume_ratio:.2f}x")
+
+            # MACD 状态
+            if result.macd_status:
+                macd_emoji = "✅" if "金叉" in result.macd_status.value else "📊"
+                lines.append(f"- {macd_emoji} **MACD**: {result.macd_status.value}")
+
+            # RSI 指标
+            if result.rsi_12:
+                rsi_emoji = "🔴" if result.rsi_12 > 70 else "🟢" if result.rsi_12 < 30 else "🟡"
+                lines.append(f"- {rsi_emoji} **RSI(12)**: {result.rsi_12:.1f}")
+
+            lines.append("")
+
+            # 信号理由（前3条）
+            if result.signal_reasons:
+                lines.extend([
+                    "### 💡 信号理由",
+                    "",
+                ])
+                for reason in result.signal_reasons[:3]:
+                    lines.append(f"✅ {reason}")
+                lines.append("")
+
+            # 风险提示（如果有）
+            if result.risk_factors:
+                lines.extend([
+                    "### ⚠️ 风险提示",
+                    "",
+                ])
+                for risk in result.risk_factors[:2]:
+                    lines.append(f"⚠️ {risk}")
+                lines.append("")
+
+            lines.extend([
+                "---",
+                "",
+            ])
+
+        # 底部说明
+        lines.extend([
+            "*🤖 日内实时分析 | 仅供参考，不构成投资建议*",
+            "",
+            f"*下次分析时间: 请查看调度配置*",
+        ])
+
+        return "\n".join(lines)
+
+    def _get_intraday_signal_emoji(self, buy_signal) -> str:
+        """
+        获取日内信号对应的 emoji
+
+        Args:
+            buy_signal: BuySignal 枚举
+
+        Returns:
+            emoji 字符串
+        """
+        from src.stock_analyzer import BuySignal
+
+        emoji_map = {
+            BuySignal.STRONG_BUY: "⭐",
+            BuySignal.BUY: "📈",
+            BuySignal.HOLD: "💼",
+            BuySignal.WAIT: "⏸️",
+            BuySignal.SELL: "📉",
+            BuySignal.STRONG_SELL: "🚨",
+        }
+
+        return emoji_map.get(buy_signal, "📊")
 
     # Display name mapping for realtime data sources
     _SOURCE_DISPLAY_NAMES = {
